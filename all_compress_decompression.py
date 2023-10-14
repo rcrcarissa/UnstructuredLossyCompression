@@ -1,14 +1,12 @@
-import h5py
+import netCDF4 as nc
 import numpy as np
 import networkx as nx
 import trimesh
-import struct
 import pickle
-import zlib
+from dahuffman import HuffmanCodec
+import zstd
 import time
 import matplotlib.pyplot as plt
-from matplotlib.tri import Triangulation
-import sys
 
 seed_instance = 87
 m = 16
@@ -75,7 +73,30 @@ def visitedUpdate(newly_visited_node: int, visited_triangles: np.array, visited_
     return visited_triangles, visited_nodes
 
 
-def DFS_compression(graph: nx.Graph, mesh: trimesh.Trimesh, node2tris: dict, func: np.array):
+def drawVisited(visited_triangles: np.array, visited_nodes: np.array, mesh: trimesh.Trimesh, i: int):
+    triangles = np.where(visited_triangles == 1)[0]
+    nodes = np.where(visited_nodes == 1)[0]
+
+    mesh_plot = Triangulation(nodes_coor[:, 0], nodes_coor[:, 1])
+    fig, ax = plt.subplots(figsize=(20, 20))
+    plt.cla()
+    ax.triplot(mesh_plot, color='black', linewidth=0.5)
+
+    edges = set()
+    for tri in triangles:
+        edges.add((mesh.faces[tri][0], mesh.faces[tri][1]))
+        edges.add((mesh.faces[tri][0], mesh.faces[tri][2]))
+        edges.add((mesh.faces[tri][1], mesh.faces[tri][2]))
+
+    for e in edges:
+        ax.plot([mesh.vertices[e[0]][0], mesh.vertices[e[1]][0]], [mesh.vertices[e[0]][1], mesh.vertices[e[1]][1]],
+                color="b", linewidth=2)
+    for n in nodes:
+        ax.plot(mesh.vertices[n][0], mesh.vertices[n][1], 'ro', markersize=5)
+    plt.savefig("search_track_fig/" + str(i) + ".png")
+
+
+def DFS_compression(graph: nx.Graph, xi: float, mesh: trimesh.Trimesh, node2tris: dict, func: np.array):
     '''
     This function conducts DFS and compression on dual graph of a triangular mesh with two conditions:
     1) Early stop: if the newly interpolated mesh node is unpredictable;
@@ -88,10 +109,6 @@ def DFS_compression(graph: nx.Graph, mesh: trimesh.Trimesh, node2tris: dict, fun
         func: function values on mesh nodes
 
     Return:
-        a dictionary of compressed sequences in following format:
-        {seed_triangle_id0: [quan_code00  quan_code01  ...],
-        seed_triangle_id1: [quan_code10  quan_code11  ...],
-        ...}
     '''
 
     # initialization
@@ -102,7 +119,7 @@ def DFS_compression(graph: nx.Graph, mesh: trimesh.Trimesh, node2tris: dict, fun
     decomp_func = np.zeros(num_nodes)
     np.random.seed(seed_instance)
     sequences = {}
-    compressed_codes = {}
+    quantization_codes = []
 
     while not all(visited_nodes):
         unvisited_triangles = np.where(visited_triangles == 0)[0]
@@ -110,15 +127,35 @@ def DFS_compression(graph: nx.Graph, mesh: trimesh.Trimesh, node2tris: dict, fun
         for n in mesh.faces[seed]:
             visited_triangles, visited_nodes = visitedUpdate(n, visited_triangles, visited_nodes, mesh, node2tris)
             decomp_func[n] = func[n]
-        sequence, compressed_code, visited_triangles, visited_nodes, decomp_func = \
-            DFS_compression_oneSeed(graph, mesh, node2tris, seed, visited_triangles, visited_nodes, func, decomp_func)
+        sequence, quantization_code, visited_triangles, visited_nodes, decomp_func = \
+            DFS_compression_oneSeed(xi, graph, mesh, node2tris, seed, visited_triangles, visited_nodes, func,
+                                    decomp_func)
         sequences[seed] = sequence
-        compressed_codes[seed] = compressed_code
+        quantization_codes += quantization_code
 
-    return sequences, compressed_codes, visited_triangles, visited_nodes
+    # two numbers for every seed: values at seed (float) and length of sequence following the seed (int)
+    # one number for number of seeds
+    # one random seed for seeds generation (int)
+    unpredicted_data_size = len(sequences) * (3 * 8 + 4) + 4 + 4
+    # Huffman encoding
+    data2compressed = [seed_instance, len(sequences)]
+    for seed in sequences.keys():
+        data2compressed += [func[n] for n in mesh.faces[seed]]
+    data2compressed += [len(s) for s in sequences.values()] + quantization_codes
+    codec = HuffmanCodec.from_data(data2compressed)
+    encoded = codec.encode(data2compressed)
+    # codec = HuffmanCodec.from_data(quantization_codes)
+    # encoded = codec.encode(quantization_codes)
+    compressed = zstd.compress(encoded, 22)
+    with open("MPAS_compressed_" + str(xi) + ".mpas", "wb") as f:
+        f.write(compressed)
+    compressed_size = unpredicted_data_size + len(compressed)
+    compression_ratio = (num_nodes - len(sequences)) * 8 / compressed_size
+
+    return sequences, compressed, compression_ratio, codec
 
 
-def DFS_compression_oneSeed(graph: nx.Graph, mesh: trimesh.Trimesh, node2tris: dict, seed: int,
+def DFS_compression_oneSeed(xi: float, graph: nx.Graph, mesh: trimesh.Trimesh, node2tris: dict, seed: int,
                             visited_triangles: np.array, visited_nodes: np.array, func: np.array,
                             decomp_func: np.array):
     '''
@@ -138,17 +175,19 @@ def DFS_compression_oneSeed(graph: nx.Graph, mesh: trimesh.Trimesh, node2tris: d
 
     Return:
         sequence: order of visited triangles by a seed
-        compressed_code: a compressed sequences in list format
+        quantization_code: a sequence of quantization codes in list format
     '''
     stack = [(seed, None)]
+    stack_set = {(seed, None)}
     sequence = []
-    compressed_code = []
+    quantization_code = []
     while len(stack) > 0:
         current_tri, prev_tri = stack.pop()
+        stack_set.remove((current_tri, prev_tri))
         if visited_triangles[current_tri] == 0:  # visited constraint
             node_to_update = list(set(mesh.faces[current_tri]) - set(mesh.faces[prev_tri]))[0]
-            pred_f = triangleInterpolation(mesh.vertices[node_to_update], prev_tri, mesh, decomp_func)
-            code_distance = int((func[node_to_update] - pred_f) / xi)
+            pred_f = triangleInterpolation(mesh.vertices[node_to_update], prev_tri, mesh, decomp_func)  # predictor
+            code_distance = int((func[node_to_update] - pred_f) / xi)  # quantization
             if code_distance < 0:
                 code = 2 ** (m - 1) + int(np.floor(code_distance / 2))
             else:
@@ -157,30 +196,29 @@ def DFS_compression_oneSeed(graph: nx.Graph, mesh: trimesh.Trimesh, node2tris: d
                 break  # unpredictable; early stop
             else:
                 decomp_func[node_to_update] = pred_f + (code - 2 ** (m - 1)) * 2 * xi
-                code = int(bin(code)[2:])
                 sequence.append(current_tri)
-                compressed_code.append(code)
+                quantization_code.append(code)
                 visited_triangles, visited_nodes = visitedUpdate(node_to_update, visited_triangles, visited_nodes, mesh,
                                                                  node2tris)
         neighbors = list(graph.neighbors(current_tri))
         neighbors.sort(reverse=True)  # search strategy: start with cell with min index
         for t in neighbors:
-            if visited_triangles[t] == 0 and t not in set(stack):
+            if visited_triangles[t] == 0 and t not in stack_set:
                 stack.append((t, current_tri))
-    return sequence, compressed_code, visited_triangles, visited_nodes, decomp_func
+                stack_set.add((t, current_tri))
+    return sequence, quantization_code, visited_triangles, visited_nodes, decomp_func
 
 
-def DFS_decompression(compressed_codes: dict, graph: nx.Graph, mesh: trimesh.Trimesh, node2tris: dict):
+def DFS_decompression(compressed: list, xi: float, codec: HuffmanCodec, graph: nx.Graph, mesh: trimesh.Trimesh,
+                      node2tris: dict):
     '''
     This function conducts DFS and decompression on dual graph of a triangular mesh with two conditions:
     1) Early stop: if the newly interpolated mesh node is unpredictable;
     2) Visited constraint: if all three mesh nodes of a triangle is interpolated, mark the triangle as visited.
 
     Augments:
-        compressed_codes: a dictionary of compressed sequences in following format:
-        {seed_triangle_id0: [quan_code00  quan_code01  ...],
-        seed_triangle_id1: [quan_code10  quan_code11  ...],
-        ...}
+        compressed: a sequence of compressed code
+        sequences: a dictionary mapping seeds to cells visited by it
         graph: dual graph of the mesh
         mesh: original mesh
         node2tris: a mapping from a mesh node to all triangles incident to it
@@ -195,28 +233,40 @@ def DFS_decompression(compressed_codes: dict, graph: nx.Graph, mesh: trimesh.Tri
     visited_triangles = np.zeros(num_cells)
     visited_nodes = np.zeros(num_nodes)
     decomp_func = np.zeros(num_nodes)
-    i = 0
+    np.random.seed(seed_instance)
+    compressed_code_start = 0
+    encoded = zstd.decompress(compressed)
+    data2compressed = np.array(codec.decode(encoded))
+    num_seeds = int(data2compressed[1])
+    sequence_lengths = data2compressed[3 * num_seeds + 2:4 * num_seeds + 2]
+    compressed_code = data2compressed[4 * num_seeds + 2:]
+    seed_idx = 0
 
-    for seed, compressed_code in compressed_codes.items():
+    while not all(visited_nodes):
+        unvisited_triangles = np.where(visited_triangles == 0)[0]
+        seed = np.random.choice(unvisited_triangles, 1)[0]
         for n in mesh.faces[seed]:
             visited_triangles, visited_nodes = visitedUpdate(n, visited_triangles, visited_nodes, mesh, node2tris)
             decomp_func[n] = func[n]
-        visited_triangles, visited_nodes, decomp_func, i = \
-            DFS_decompression_oneSeed(compressed_code, graph, mesh, node2tris, seed, visited_triangles, visited_nodes,
-                                      decomp_func, i)
+        compressed_code_end = compressed_code_start + int(sequence_lengths[seed_idx])
+        visited_triangles, visited_nodes, decomp_func = \
+            DFS_decompression_oneSeed(compressed_code[compressed_code_start:compressed_code_end], xi, graph, mesh,
+                                      node2tris, seed, visited_triangles, visited_nodes, decomp_func)
+        seed_idx += 1
+        compressed_code_start = compressed_code_end
 
-    return decomp_func, visited_triangles, visited_nodes
+    return decomp_func
 
 
-def DFS_decompression_oneSeed(compressed_code: list, graph: nx.Graph, mesh: trimesh.Trimesh, node2tris: dict, seed: int,
-                              visited_triangles: np.array, visited_nodes: np.array, decomp_func: np.array, i: int):
+def DFS_decompression_oneSeed(compressed: list, xi: float, graph: nx.Graph, mesh: trimesh.Trimesh, node2tris: dict,
+                              seed: int, visited_triangles: np.array, visited_nodes: np.array, decomp_func: np.array):
     '''
     This function conducts DFS and decompression for ONE SEED on dual graph of a triangular mesh with two conditions:
     1) Early stop: if the newly interpolated mesh node is unpredictable;
     2) Visited constraint: if all three mesh nodes of a triangle is interpolated, mark the triangle as visited.
 
     Augments:
-        compressed_code: a list of quantization codes following the seed
+        compressed: a list of quantization codes following the seed
         graph: dual graph of the mesh
         mesh: original mesh
         node2tris: a mapping from a mesh node to all triangles incident to it
@@ -229,78 +279,69 @@ def DFS_decompression_oneSeed(compressed_code: list, graph: nx.Graph, mesh: trim
 
     '''
     stack = [(seed, None)]
-    idx = 0
-    while idx < len(compressed_code):
+    stack_set = {(seed, None)}
+    while len(compressed) > 0:
         current_tri, prev_tri = stack.pop()
+        stack_set.remove((current_tri, prev_tri))
         if visited_triangles[current_tri] == 0:  # visited constraint
             node_to_update = list(set(mesh.faces[current_tri]) - set(mesh.faces[prev_tri]))[0]
             pred_f = triangleInterpolation(mesh.vertices[node_to_update], prev_tri, mesh, decomp_func)
-            code = compressed_code[idx]
-            code_distance = int('0b' + str(code), 2) - 2 ** (m - 1)
+            code = compressed[0]
+            compressed = np.delete(compressed, 0)
+            code_distance = code - 2 ** (m - 1)
             visited_triangles, visited_nodes = visitedUpdate(node_to_update, visited_triangles, visited_nodes, mesh,
                                                              node2tris)
             decomp_func[node_to_update] = pred_f + code_distance * 2 * xi
-            idx += 1
         neighbors = list(graph.neighbors(current_tri))
         neighbors.sort(reverse=True)  # search strategy: start with cell with min index
         for t in neighbors:
-            if visited_triangles[t] == 0 and t not in set(stack):
+            if visited_triangles[t] == 0 and t not in stack_set:
                 stack.append((t, current_tri))
-        i += 1
-        # drawVisited(visited_triangles, visited_nodes, mesh, i)
-    return visited_triangles, visited_nodes, decomp_func, i
+                stack_set.add((t, current_tri))
+
+    return visited_triangles, visited_nodes, decomp_func
 
 
 if __name__ == "__main__":
-    with h5py.File("../../../TimeVaryingMesh/xgc/xgc.mesh.h5", "r") as f:
-        cells = np.array(f["cell_set[0]"]["node_connect_list"])
-        nodes_coor = np.array(f["coordinates"]["values"])
-        num_cells = f["n_t"][0]
-        num_nodes = f["n_n"][0]
-    with h5py.File("../../../TimeVaryingMesh/xgc/xgc.3d.00165.h5", "r") as f:
-        func = np.array(f["dneOverne0"])[:, 0]
+    f = nc.Dataset("output.nc")
+    nodes_coor = np.concatenate((np.array(f.variables["xCell"]).reshape(-1, 1),
+                                 np.array(f.variables["yCell"]).reshape(-1, 1),
+                                 np.array(f.variables["zCell"]).reshape(-1, 1)), axis=1)
+    cells = np.array(f.variables['cellsOnVertex'])
+    reindex = np.where(cells == 0)
+    for i in range(reindex[0].shape[0]):
+        cells[reindex[0][i]][reindex[1][i]] = 1
+    cells -= 1
+    func = np.array(f.variables["temperature"])[0, :, 0]
+    num_nodes = nodes_coor.shape[0]
+    num_cells = cells.shape[0]
     dual_graph = dualGraph4MeshTriCells(cells, num_cells)
-    mesh = trimesh.Trimesh(vertices=np.concatenate((nodes_coor, np.zeros((num_nodes, 1))), axis=1), faces=cells)
+    mesh = trimesh.Trimesh(vertices=nodes_coor, faces=cells)
     node2tris = node2trisDict(cells, num_nodes)
 
-    file = ''
-    for n in range(num_nodes):
-        file += str(func[n]) + ' '
-    file = file[:-1]
-
     max_signal = np.max(func)
+    min_signal = np.min(func)
     xi_dim = len(xi_range)
     runtime = np.zeros((xi_dim, 2))
-    mse = np.zeros(xi_dim)
+    nrmse = np.zeros(xi_dim)
     psnr = np.zeros(xi_dim)
     compression_ratio = np.zeros(xi_dim)
     bit_rate = np.zeros(xi_dim)
 
     for i, xi in enumerate(xi_range):
         t0 = time.perf_counter()
-        sequences, compressed_codes, _, _ = DFS_compression(dual_graph, mesh, node2tris, func)
+        sequences, compressed_codes, cr, codec = DFS_compression(dual_graph, xi, mesh, node2tris, func)
         t1 = time.perf_counter()
         runtime[i, 0] = t1 - t0
-        print(t1 - t0)
         t0 = time.perf_counter()
-        decompressed_vals, _, _ = DFS_decompression(compressed_codes, dual_graph, mesh, node2tris)
+        decompressed_vals = DFS_decompression(compressed_codes, xi, codec, dual_graph, mesh, node2tris)
         t1 = time.perf_counter()
         runtime[i, 1] = t1 - t0
-        print(t1 - t0)
-        mse[i] = np.sum((decompressed_vals - func) ** 2) / num_nodes
-        psnr[i] = 20 * np.log10(max_signal) - 10 * np.log10(mse[i])
-
-        to_comp = bytearray(b'')
-        for seed, sequence in compressed_codes.items():
-            to_comp += int(seed).to_bytes(m, 'big')
-            for n in cells[seed]:
-                to_comp += struct.pack("f", func[n])
-            for v in sequence:
-                integer = int('0b' + str(v), 2)
-                to_comp += integer.to_bytes(m, 'big')
-        comp = zlib.compress(to_comp)
-        compression_ratio[i] = sys.getsizeof(file) / sys.getsizeof(comp)
-        bit_rate[i] = 64 / compression_ratio[i]
+        compression_ratio[i] = cr
+        bit_rate[i] = 64 / cr
+        mse = np.sum((decompressed_vals - func) ** 2) / num_nodes
+        nrmse[i] = np.sqrt(mse) / (max_signal - min_signal)
+        psnr[i] = 20 * np.log10(max_signal) - 10 * np.log10(mse)
 
         with open("sequences_" + str(xi) + ".pickle", "wb") as f:
             pickle.dump(sequences, f)
@@ -317,7 +358,7 @@ if __name__ == "__main__":
     axs[0, 1].plot(xi_range, runtime[:, 1])
     axs[0, 1].set_xlabel("global error")
     axs[0, 1].set_ylabel("runtime (decompression)")
-    axs[0, 2].plot(xi_range, mse)
+    axs[0, 2].plot(xi_range, nrmse)
     axs[0, 2].set_xlabel("global error")
     axs[0, 2].set_ylabel("MSE")
     axs[0, 3].plot(xi_range, psnr)
@@ -329,17 +370,15 @@ if __name__ == "__main__":
     axs[1, 1].plot(xi_range, bit_rate)
     axs[1, 1].set_xlabel("global error")
     axs[1, 1].set_ylabel("bit rate")
-    axs[1, 2].plot(bit_rate, mse)
+    axs[1, 2].plot(bit_rate, nrmse)
     axs[1, 2].set_xlabel("bit rate")
-    axs[1, 2].set_ylabel("MSE")
+    axs[1, 2].set_ylabel("NRMSE")
     axs[1, 3].plot(bit_rate, psnr)
     axs[1, 3].set_xlabel("bit rate")
     axs[1, 3].set_ylabel("PSNR (dB)")
-    fig.suptitle("XGC data")
-    plt.savefig("xgc.png")
+    fig.suptitle("MPAS-ocean data")
+    plt.savefig("mpas-ocean.png")
 
-    print(runtime)
-    print(mse)
-    print(psnr)
-    print(compression_ratio)
-    print(bit_rate)
+    eval_metrics = {"runtime": runtime, "nrmse": nrmse, "psnr": psnr, "cr": compression_ratio, "br": bit_rate}
+    with open("eval_metrics.pickle", "wb") as f:
+        pickle.dump(eval_metrics, f)
