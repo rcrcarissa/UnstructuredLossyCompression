@@ -6,7 +6,6 @@ A Prediction‐Traversal Approach for Compressing Scientific Data on Unstructure
 
 To run this project, you need to have the following Python packages installed:
 
-- `h5py`: For working with HDF5 files
 - `numpy`: For numerical operations
 - `networkx`: For creating and manipulating complex networks
 - `trimesh`: For handling triangular meshes
@@ -16,9 +15,15 @@ To run this project, you need to have the following Python packages installed:
 
 ## Testing Examples
 
+To run this project, execute the following command in your terminal:
 ```
-python compress_decompress.py -dataset <dataset_name> -attribute <attribute_name>
+$ python compress_decompress.py -dataset <dataset_name> -attribute <attribute_name>
 ```
+For example:
+```
+$ python compress_decompress.py -dataset syn -attribute data
+```
+See the results in `results/<dataset_name>/<attribute_name>`.
 
 ## Citation
 
