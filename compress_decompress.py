@@ -1,4 +1,3 @@
-import h5py
 import numpy as np
 import networkx as nx
 import pickle
@@ -14,43 +13,15 @@ m = 16
 
 
 def preprocessing_write(dataset, attribute):
-    if dataset == "XGC":
-        with h5py.File("../../TimeVaryingMesh/xgc/xgc.mesh.h5", "r") as f:
-            cells = np.array(f["cell_set[0]"]["node_connect_list"])
-            nodes_coor = np.array(f["coordinates"]["values"])
-        with h5py.File("../../TimeVaryingMesh/xgc/xgc.3d.00165.h5", "r") as f:
-            func = np.array(f[attribute])[:, 0]
-        num_cells = cells.shape[0]
-        dual_graph = dualGraph4MeshTriCells(cells, num_cells)
-        dim = 2
-    elif dataset == "synthetic":
-        with open("../../TimeVaryingMesh/case_studies/synthetic/dataGen/syn_mesh.pickle", "rb") as f:
-            nodes_coor, cells = pickle.load(f)
-        with open("../../TimeVaryingMesh/case_studies/synthetic/dataGen/values.pickle", "rb") as f:
-            func = pickle.load(f)[:, 0]
-        num_cells = cells.shape[0]
-        dual_graph = dualGraph4MeshTriCells(cells, num_cells)
-        dim = 2
-    elif dataset == "MPAS":
-        fname = "datasets/" + dataset + "/" + dataset + ".pickle"
-        with open(fname, "rb") as f:
-            data = pickle.load(f)
-        nodes_coor = data["nodes_coor"]
-        cells = data["cells"]
-        func = data[attribute]
-        num_cells = cells.shape[0]
-        dual_graph = dualGraph4MeshTriCells(cells, num_cells)
-        dim = 2
-    else:
-        fname = "datasets/" + dataset + "/" + dataset + ".pickle"
-        with open(fname, "rb") as f:
-            data = pickle.load(f)
-        nodes_coor = data["nodes_coor"]
-        cells = data["cells"]
-        func = data[attribute]
-        num_cells = cells.shape[0]
-        dual_graph = dualGraph4MeshTetCells(cells, num_cells)
-        dim = 3
+    fname = "datasets/" + dataset + "/" + dataset + ".pickle"
+    with open(fname, "rb") as f:
+        data = pickle.load(f)
+    nodes_coor = data["nodes_coor"]
+    cells = data["cells"]
+    func = data[attribute]
+    num_cells = cells.shape[0]
+    dual_graph = dualGraph4MeshTetCells(cells, num_cells)
+    dim = nodes_coor.shape[1]
     node2cells = node2cellsDict(cells)
     func.tofile("datasets/" + dataset + "/" + attribute + "_binary.dat")
     with open("datasets/" + dataset + "/" + "dual.pickle", "wb") as f:
@@ -61,37 +32,13 @@ def preprocessing_write(dataset, attribute):
 
 
 def preprocessing_read(dataset, attribute):
-    if dataset == "XGC":
-        with h5py.File("../../TimeVaryingMesh/xgc/xgc.mesh.h5", "r") as f:
-            cells = np.array(f["cell_set[0]"]["node_connect_list"])
-            nodes_coor = np.array(f["coordinates"]["values"])
-        with h5py.File("../../TimeVaryingMesh/xgc/xgc.3d.00165.h5", "r") as f:
-            func = np.array(f[attribute])[:, 0]
-        dim = 2
-    elif dataset == "synthetic":
-        with open("../../TimeVaryingMesh/case_studies/synthetic/dataGen/syn_mesh.pickle", "rb") as f:
-            nodes_coor, cells = pickle.load(f)
-        with open("../../TimeVaryingMesh/case_studies/synthetic/dataGen/values.pickle", "rb") as f:
-            func = pickle.load(f)[:, 0]
-        dim = 2
-    elif dataset == "MPAS":
-        fname = "datasets/" + dataset + "/" + dataset + ".pickle"
-        with open(fname, "rb") as f:
-            data = pickle.load(f)
-        nodes_coor = data["nodes_coor"]
-        cells = data["cells"]
-        # func = data[attribute]
-        func = np.fromfile("datasets/" + dataset + "/" + attribute + "_binary.dat")
-        dim = 2
-    else:
-        fname = "datasets/" + dataset + "/" + dataset + ".pickle"
-        with open(fname, "rb") as f:
-            data = pickle.load(f)
-        nodes_coor = data["nodes_coor"]
-        cells = data["cells"]
-        # func = data[attribute]
-        func = np.fromfile("datasets/" + dataset + "/" + attribute + "_binary.dat")
-        dim = 3
+    fname = "datasets/" + dataset + "/" + dataset + ".pickle"
+    with open(fname, "rb") as f:
+        data = pickle.load(f)
+    nodes_coor = data["nodes_coor"]
+    cells = data["cells"]
+    func = np.fromfile("datasets/" + dataset + "/" + attribute + "_binary.dat")
+    dim = nodes_coor.shape[1]
     with open("datasets/" + dataset + "/" + "dual.pickle", "rb") as f:
         dual_graph = pickle.load(f)
     with open("datasets/" + dataset + "/" + "node2cells.pickle", "rb") as f:
@@ -455,18 +402,11 @@ if __name__ == "__main__":
     xi_pct_range = [1e-1, 5e-2, 2e-2, 1e-2, 5e-3, 2e-3, 1e-3, 5e-4, 2e-4, 1e-4, 5e-5, 2e-5, 1e-5, 5e-6, 2e-6, 1e-6]
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('-dataset', default="LES_l", type=str)
-    parser.add_argument('-attribute', default="pressure", type=str)
+    parser.add_argument('-dataset', type=str)
+    parser.add_argument('-attribute', type=str)
     args = parser.parse_args()
     dataset = args.dataset
     attribute = args.attribute
-    # dataset: one of "synthetic", "XGC", "MPAS", "LES_s", "LES_l", "F6", "VFEM", "car", "NYX"
-    ''' attribute
-        "XGC": "dneOverne0"
-        "LES_s", "LES_l", or "MPAS": one of "temperature", "pressure"
-        "F6", "VFEM", or "car": "pressure"
-        "TSLAB": one of "rho", "phi", "u", and "v"
-    '''
 
     t0 = time.perf_counter()
     nodes_coor, cells, func, dual, node2cells, dim = preprocessing_write(dataset, attribute)
