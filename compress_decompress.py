@@ -216,14 +216,14 @@ def DFS_compression(graph: nx.Graph, xi: float, dim: int, nodes_coor: np.array, 
                                     unvisited_cells, visited_nodes, num_visited_nodes, func, decomp_func)
         sequences[seed] = sequence
 
-    # for every seed: four values at seed (float64) and end mark of sequences (float32)
-    unpredicted_data_size = len(sequences) * (4 * 8 + 4)
+    # for every seed: three / four values at seed (float64) and end mark of sequences (float32)
+    unpredicted_data_size = len(sequences) * ((dim + 1) * 8 + 4)
     # Huffman encoding
     codec = HuffmanCodec.from_data(data2compressed)
     encoded = codec.encode(data2compressed)
     compressed = zstd.compress(encoded, 22)
     compressed_size = unpredicted_data_size + len(compressed)
-    compression_ratio = (num_nodes - 4 * len(sequences)) * 8 / compressed_size
+    compression_ratio = num_nodes * 8 / compressed_size
 
     return sequences, compressed, compression_ratio, codec
 
