@@ -1,7 +1,4 @@
-#include <fstream>
-#include <map>
-#include <cstdint>
-#include <vector>
+#include "fileIO.hpp"
 
 void writeMap(const std::map<int, std::pair<uint32_t, int>> &m, const std::string &filename)
 {
@@ -35,45 +32,56 @@ std::map<int, std::pair<uint32_t, int>> readMap(const std::string &filename)
     return m;
 }
 
-template <typename T>
-void writeVectorBinary(const std::vector<T> &vec, const std::string &filename)
+void readRawArrayBinary(const std::string &fileName, void *data, std::size_t N, DataType type)
 {
-    std::ofstream ofs(filename, std::ios::binary);
-    size_t size = vec.size();
-    ofs.write(reinterpret_cast<const char *>(&size), sizeof(size));
-    ofs.write(reinterpret_cast<const char *>(vec.data()), sizeof(T) * size);
-}
-
-template <typename T>
-std::vector<T> readVectorBinary(const std::string &filename)
-{
-    std::ifstream ifs(filename, std::ios::binary);
-    size_t size;
-    ifs.read(reinterpret_cast<char *>(&size), sizeof(size));
-    std::vector<T> vec(size);
-    ifs.read(reinterpret_cast<char *>(vec.data()), sizeof(T) * size);
-    return vec;
-}
-
-template <typename T>
-void writeRawArrayBinary(const T *data, size_t N, const std::string &filename)
-{
-    static_assert(std::is_floating_point<T>::value, "Type must be float or double.");
-
-    std::ofstream file(filename, std::ios::binary);
-    if (!file.is_open())
+    std::ifstream inputFile(fileName, std::ios::binary | std::ios::ate);
+    if (!inputFile)
     {
-        std::cerr << "Error: Could not open file for writing." << std::endl;
-        return;
+        throw std::runtime_error("Error opening file");
     }
 
-    // Write the data to the binary file
-    file.write(reinterpret_cast<const char *>(data), N * sizeof(T));
+    std::streamsize fileSize = inputFile.tellg();
+    inputFile.seekg(0, std::ios::beg);
 
-    if (!file)
+    std::size_t elementSize;
+    switch (type)
     {
-        std::cerr << "Error: Failed to write to file." << std::endl;
+    case DataType::FLOAT:
+        elementSize = sizeof(float);
+        break;
+    case DataType::DOUBLE:
+        elementSize = sizeof(double);
+        break;
+    case DataType::SIZE_T:
+        elementSize = sizeof(size_t);
+        break;
+    case DataType::INT:
+        elementSize = sizeof(int);
+        break;
+    default:
+        throw std::invalid_argument("Invalid data type");
     }
 
-    file.close();
+    if (fileSize != static_cast<std::streamsize>(elementSize * N))
+    {
+        throw std::runtime_error("File size does not match array size");
+    }
+
+    if (!inputFile.read(reinterpret_cast<char *>(data), fileSize))
+    {
+        throw std::runtime_error("Error reading file");
+    }
+
+    inputFile.close();
 }
+
+template void writeVectorBinary(const std::vector<uint8_t> &vec, const std::string &filename);
+template void writeVectorBinary(const std::vector<float> &vec, const std::string &filename);
+template void writeVectorBinary(const std::vector<double> &vec, const std::string &filename);
+
+template std::vector<uint8_t> readVectorBinary(const std::string &filename);
+template std::vector<float> readVectorBinary(const std::string &filename);
+template std::vector<double> readVectorBinary(const std::string &filename);
+
+template void writeRawArrayBinary(const float *data, size_t N, const std::string &filename);
+template void writeRawArrayBinary(const double *data, size_t N, const std::string &filename);
