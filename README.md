@@ -2,7 +2,9 @@ A Prediction‐Traversal Approach for Compressing Scientific Data on Unstructure
 =====
 (C) 2024 by Congrong Ren. See LICENSE in top-level directory.
 
-## Dependencies
+## Python Implementation
+
+### Dependencies
 
 To run this project, you need to have the following Python packages installed:
 
@@ -13,7 +15,7 @@ To run this project, you need to have the following Python packages installed:
 - `zstd`: For Zstandard compression
 - `matplotlib`: For plotting and visualization
 
-## Testing Examples
+### Testing Examples
 
 To run this project, execute the following command in your terminal:
 ```
@@ -24,6 +26,21 @@ For example:
 $ python compress_decompress.py -dataset syn -attribute data
 ```
 See the results in `results/<dataset_name>/<attribute_name>`.
+
+## C++ Implementation
+
+### 3rd Party Libraries / Tools
+- [Zstandard](https://facebook.github.io/zstd/).
+
+### Installation
+```
+$ mkdir build && cd build
+$ cmake ..
+$ make
+```
+
+### Testing Examples
+You can use the executable './ptz' command to see the full list of arguments.
 
 ## Citation
 
