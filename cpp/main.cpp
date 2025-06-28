@@ -760,41 +760,6 @@ void DFSDecompressOneSequence(const T xi, const T *nodeCoors, const size_t *cell
 
 int main(int argc, char *argv[])
 {
-    constexpr size_t randomSeed = 7548921;
-
-    // /////////////////////////////////////////////////////////
-    // constexpr size_t numNodes = 235055;
-    // constexpr size_t numCells = 461239;
-    // constexpr size_t node_dim = 3;
-    // constexpr size_t face_dim = 2;
-    // double *nodeCoors = new double[numNodes * node_dim];
-    // double *values = new double[numNodes];
-    // size_t *cells = new size_t[numCells * (face_dim + 1)];
-    // int *tempCells = new int[numCells * (face_dim + 1)];
-    // readRawArrayBinary("datasets/MPAS-O/nodes.dat", nodeCoors, numNodes * node_dim, DataType::DOUBLE);
-    // readRawArrayBinary("datasets/MPAS-O/salinity.dat", values, numNodes, DataType::DOUBLE);
-    // readRawArrayBinary("datasets/MPAS-O/cells.dat", tempCells, numCells * (face_dim + 1), DataType::INT);
-    // for (size_t i = 0; i < numCells * (face_dim + 1); i++)
-    // {
-    //     cells[i] = static_cast<size_t>(tempCells[i]);
-    // }
-    // double xi = 0.025;
-    // double range = getRange(values, numNodes);
-    // xi *= range;
-    // // DFSCompression<double, 2, 3>(xi, nodeCoors, cells, values, numCells, numNodes, randomSeed, "results/maps-o");
-    // double *decompValues = new double[numNodes];
-    // DFSDecompression<double, 2, 3>(xi, nodeCoors, cells, numCells, numNodes, randomSeed, "results/maps-o", decompValues);
-    // double mse = 0;
-    // for (size_t i = 0; i < numNodes; i++)
-    // {
-    //     double diff = values[i] - decompValues[i];
-    //     mse += diff * diff;
-    // }
-    // mse /= numNodes;
-    // std::cout << "MSE: " << mse << std::endl;
-    // writeRawArrayBinary(decompValues, numNodes, "decomp.dat");
-    // /////////////////////////////////////////////////////////
-
     Parsing(argc, argv);
 
     size_t *cells = new size_t[numCells * (face_dim + 1)];
